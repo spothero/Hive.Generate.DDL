@@ -1,4 +1,12 @@
 # Hive.Generate.DDL
+
+## How to build and run
+
+- build: `cd AvroGenerator && mvn clean compile assembly:single` 
+- run: `java -jar target/hive.avro.gen.jar /path/to/in/avro/file.avro /path/to/out/ddl/file.sql`
+
+Then take the Athena DDL and run it against athena to generate a table from the avro definition
+
 ## Generate Overview
 This project will take s DB schema and generate the three things:
 
