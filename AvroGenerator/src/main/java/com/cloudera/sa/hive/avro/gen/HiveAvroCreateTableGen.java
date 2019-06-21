@@ -8,6 +8,7 @@ import java.util.List;
 import java.util.Map;
 
 import org.apache.avro.Schema;
+import org.apache.avro.data.Json;
 import org.apache.avro.file.DataFileStream;
 import org.apache.avro.file.DataFileWriter;
 import org.apache.avro.generic.GenericDatumReader;
@@ -17,6 +18,15 @@ import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FSDataInputStream;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
+import org.codehaus.jackson.JsonGenerator;
+import org.codehaus.jackson.JsonNode;
+import org.codehaus.jackson.annotate.JsonCreator;
+import org.codehaus.jackson.map.ObjectMapper;
+import org.codehaus.jackson.node.ArrayNode;
+import org.codehaus.jackson.node.JsonNodeFactory;
+import org.codehaus.jackson.node.ObjectNode;
+import org.json.JSONObject;
+import org.mortbay.util.ajax.JSON;
 
 public class HiveAvroCreateTableGen 
 {
@@ -53,7 +63,7 @@ public class HiveAvroCreateTableGen
 			System.out.println("-------------------");
 			System.out.println(s.getName() + " " + s);
 			
-			String hiveScript = convertAvroSchemaToAthenaSchema(s);
+			String hiveScript = convertAvroSchemaToGlueSchema(s);
 			
 			System.out.println("-------------------");
 			System.out.println("Create table script:");
@@ -130,6 +140,70 @@ public class HiveAvroCreateTableGen
     	DDL += "STORED AS AVRO" + lineSeparator;
     	DDL += "--LOCATION 's3://'";
     	return DDL;
+	}
+
+	private static ObjectNode convertMapEntryToJson(Map.Entry<String, String> entry){
+    	ObjectNode obj = JsonNodeFactory.instance.objectNode();
+    	obj.put("Name", entry.getKey());
+    	obj.put("Type", entry.getValue());
+    	return obj;
+	}
+
+	public static String convertAvroSchemaToGlueSchema(Schema s){
+		Map<String, String> datatypes = HiveAvroCreateTableGen.convertAvroSchemaToAthenaDatatypes(s);
+
+		ArrayNode columns = JsonNodeFactory.instance.arrayNode();
+		for(Map.Entry<String, String> kvp: datatypes.entrySet()){
+			columns.add(HiveAvroCreateTableGen.convertMapEntryToJson(kvp));
+		}
+
+		ObjectNode tableInput = JsonNodeFactory.instance.objectNode();
+
+		ObjectNode params = JsonNodeFactory.instance.objectNode();
+		params.put("EXTERNAL", "TRUE");
+
+		ObjectNode serdeInfo = JsonNodeFactory.instance.objectNode();
+		ObjectNode serdeParams = JsonNodeFactory.instance.objectNode();
+		serdeParams.put("serialization.format", "1");
+
+		try{
+			final ObjectMapper mapper = new ObjectMapper();
+			JsonNode avroSchema = mapper.readTree(s.toString());
+			serdeParams.put("avro.schema.literal", avroSchema);
+		}catch (Exception e){
+			throw new RuntimeException(e);
+		}
+
+
+		serdeInfo.put("SerializationLibrary",  "org.apache.hadoop.hive.serde2.avro.AvroSerDe");
+		serdeInfo.put("Parameters", serdeParams);
+
+		ObjectNode storageDescriptor = JsonNodeFactory.instance.objectNode();
+		storageDescriptor.put("InputFormat",  "org.apache.hadoop.hive.ql.io.avro.AvroContainerInputFormat");
+		storageDescriptor.put("OutputFormat", "org.apache.hadoop.hive.ql.io.avro.AvroContainerOutputFormat");
+		storageDescriptor.put("Location", "location");
+		storageDescriptor.put("Columns", columns);
+		storageDescriptor.put("SerdeInfo", serdeInfo);
+
+
+		ArrayNode partitionKeys = JsonNodeFactory.instance.arrayNode();
+		ObjectNode datePartition = JsonNodeFactory.instance.objectNode();
+		datePartition.put("Name", "date");
+		datePartition.put("Type", "string");
+		partitionKeys.add(datePartition);
+
+		tableInput.put("Name", "table_name");
+		tableInput.put("TableType", "EXTERNAL_TABLE");
+		tableInput.put("Parameters", params);
+		tableInput.put("StorageDescriptor", storageDescriptor );
+		tableInput.put("PartitionKeys", partitionKeys);
+
+
+		ObjectNode root = JsonNodeFactory.instance.objectNode();
+		root.put("DatabaseName", "db_name");
+		root.put("TableInput", tableInput);
+
+		return root.toString();
 	}
     
     public static String generateCreateTableScript(Schema s) {
